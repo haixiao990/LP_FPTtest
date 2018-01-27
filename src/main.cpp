@@ -153,10 +153,11 @@ int main(int argc, char **argv)
 {
 	// Varibles
 	// ==============================================================================
-	// input files
+	// input directory including bedpostx results
 	char * input_dir = "D:/Programming/FiberTrackGPUtest/MinhuiData/0001S1.bedpostx";
 	
-	// if a probability mask is used
+	// make the macro definition of the USE_PROBMASK if a probability mask is used,
+	// the probability mask can be derived from results of FSL ProbtrackX or from this projects
 #ifdef USE_PROBMASK
 	string probmask_file   = "probmap1.nii";
 #endif
@@ -371,6 +372,7 @@ int main(int argc, char **argv)
 	float reciprocal_pixdimY = 1.0f/pixdimY;
 	float reciprocal_pixdimZ = 1.0f/pixdimZ;
 	
+	//make the macro definition if the image need to be reversed in X or Y directions
 #ifdef FLIP_Y
 	reverse_y(array_input_mask, 1, dimX, dimY, dimZ);
 	#ifdef FINAL_SEED_TRACK
@@ -419,6 +421,8 @@ int main(int argc, char **argv)
 	//cout<<num_seed_voxel<<endl;
 	#endif
 	
+	//A predefined number of tracking steps in each round with a parallel openCL device.
+	//For details please refer to "Xu Mo, Probabilistic brain fiber tractography on gpus, IPDPSW, 2012"
 	int iteration_time[ROUND_MAX] ={5,10,20,20,50,100,100,200,200,200,200,200,200};
 	int iter_max = 0;
 	for (int i = 0; i < ROUND_MAX; i ++)
@@ -429,13 +433,17 @@ int main(int argc, char **argv)
 	}
 
 	numVoxel = 0;
+#ifdef FINAL_SEED_TRACK
+	numVoxel = num_seed_voxel;
+#else
 	for (int i = 0; i < size_cube; i++)
-	{
-		//if (array_input_mask[i] != 0)
-		if (array_input_seed[i] != 0)
+	{		
+		if (array_input_mask[i] != 0)
 			numVoxel ++;
 	}
+#endif
 
+	// Everything is double because of the forward and backward directions
 	result_sequence = new float[numVoxel * 8 * iter_max];
 
 	step = new int[2 * numVoxel];						//
@@ -635,7 +643,8 @@ int main(int argc, char **argv)
 	//////////////////////////////////////////////////////////////
 	// =====================================
 	// initialize finished
-	// statistics
+	
+	// initialize statistics and start coodinates
 	int reason_length = 0, reason_border = 0, reason_low_f = 0, reason_big_turn = 0, reason_unknown = 0, reason_begin_low_f = 0;
 	int max_step = 0;
 	int total_iteration_count = 0;
@@ -663,6 +672,8 @@ int main(int argc, char **argv)
 		}
 	}
 
+
+	//initialize parameters used in a .trk file header
 	char id_string[6];   
 	id_string[0]='T';
     id_string[1]='R';
@@ -727,6 +738,7 @@ int main(int argc, char **argv)
 	string fileOut5("final_all.trk");
 	#endif
 	
+	// Write these parameters into the .trk result file
 	filestream_output.open(fileOut5,ios::binary);
 	filestream_output.write(id_string,6);
 	filestream_output.write((char *)dim,3*sizeof(short int));
@@ -790,10 +802,8 @@ int main(int argc, char **argv)
 	
 	for(int sample = 0; sample < Num_Probtrack_Sample; sample++)
 	{
-	
-
-	//multiple samples
-	
+		//multiple samples, randomly choose one direction sample
+		//when tracking to a specific voxel
 		for (int i=0;i<size_cube;i++)
 		{
 			 int num=randn(numSample);
@@ -803,16 +813,13 @@ int main(int argc, char **argv)
 			 array_input_th1_new[i]=array_input_th1[num*size_cube+i];
 			 array_input_ph2_new[i]=array_input_ph2[num*size_cube+i];
 			 array_input_th2_new[i]=array_input_th2[num*size_cube+i];
-		}
-		
-	
+		}	
 	
 	    //double direction tracking
 		#ifdef FINAL_SEED_TRACK
 		memset(flag,0,sizeof(char)*2*numVoxel);
 		#endif
-		//for(int i=0;i<2*numVoxel;i++)
-		//	flag[i]=0;
+		
 	
 		for (int turn=0;turn<2;turn++)
 		{	
@@ -835,9 +842,9 @@ int main(int argc, char **argv)
 			numValidVoxel = 2 * numVoxel;
 			for (int n = 0; n < numVoxel; n++)
 			{
-				start_coordinate[4 * n] = copy_start_coordinate[4 * n];
-				start_coordinate[4 * n + 1] = copy_start_coordinate[4 * n + 1];
-				start_coordinate[4 * n + 2] = copy_start_coordinate[4 * n + 2];
+				start_coordinate[4 * n] = copy_start_coordinate[4 * n];            //X axis
+				start_coordinate[4 * n + 1] = copy_start_coordinate[4 * n + 1];    //Y axis
+				start_coordinate[4 * n + 2] = copy_start_coordinate[4 * n + 2];    //Z axis
 				start_coordinate[4 * numVoxel + 4 * n] = copy_start_coordinate[4 * numVoxel + 4 * n];
 				start_coordinate[4 * numVoxel + 4 * n + 1] = copy_start_coordinate[4 * numVoxel + 4 * n + 1];
 				start_coordinate[4 * numVoxel + 4 * n + 2] = copy_start_coordinate[4 * numVoxel + 4 * n + 2];
@@ -933,11 +940,11 @@ int main(int argc, char **argv)
 				//                                      //
 				//////////////////////////////////////////
 	
-				// run the kernel (The main function here)
+				/*********************************************************/
+				// run the kernel (The main tracking process is here), get the result_sequence
 				ciErr1 = clEnqueueNDRangeKernel(cqCommandQueue, ckKernel, 1, NULL, &szGlobalWorkSize, &szLocalWorkSize, 0, NULL, &ceEvent);    
 				if (ciErr1 != CL_SUCCESS)
-					cout<<"Error in clEnqueueNDRangeKernel"<<ciErr1<<endl;
-	
+					cout<<"Error in clEnqueueNDRangeKernel"<<ciErr1<<endl;				
 				clWaitForEvents(1, &ceEvent);
 				//////////////////////////////////////////
 				//                 Timer                //
@@ -947,7 +954,7 @@ int main(int argc, char **argv)
 				GPU_transfer_time = clock(); 
 				//                                      //
 				//////////////////////////////////////////
-	
+				//write the tracking path (kernel_result) to result_sequence
 				ciErr1 = clEnqueueReadBuffer (cqCommandQueue, kernel_result, CL_TRUE, 0, sizeof(float) * 4 * numValidVoxel * iteration_time[round], result_sequence, 0, NULL, NULL);
 				//ciErr1 = clEnqueueReadBuffer (cqCommandQueue, kernel_step, CL_TRUE, 0, sizeof(int) * numValidVoxel, step, 0, NULL, NULL);
 				ciErr1 = clEnqueueReadBuffer (cqCommandQueue, kernel_iteration, CL_TRUE, 0, sizeof(int) * numValidVoxel, iteration, 0, NULL, NULL);
@@ -958,6 +965,7 @@ int main(int argc, char **argv)
 				ciErr1 = clEnqueueReadBuffer (cqCommandQueue, kernel_start_direction, CL_TRUE, 0, sizeof(float) * 4 * numValidVoxel, start_direction, 0, NULL, NULL);
 				if (ciErr1 != CL_SUCCESS)
 					cout<<"Error in clEnqueueReadBuffer"<<endl;
+				/*********************************************************/
 	
 				//////////////////////////////////////////
 				//                 Timer                //
@@ -980,7 +988,8 @@ int main(int argc, char **argv)
 				*/
 				///////////////////////////////////////////
 				
-				//process the result sequence
+				//process the result sequence to track_result (forward tracking path) 
+				//and track_result1 (backward tracking path)
 			    int seek=0;
 				if(turn==0)
 				{
@@ -999,7 +1008,8 @@ int main(int argc, char **argv)
 								    result_count++;
 							    }
 							    result_count=result_count-3;
-							    if(sum!=0)
+							    //if sum is 0, the tracking path already terminate. 
+								if(sum!=0)
 							    {
 							        for (int k=0;k<3;k++)
 						            {	
@@ -1008,7 +1018,7 @@ int main(int argc, char **argv)
 							        }	
 									#ifdef FINAL_SEED_TRACK
 									seek=floor(result_sequence[result_count-3])+dimX*floor(result_sequence[result_count-2])+dimX*dimY*floor(result_sequence[result_count-1]);
-									if( array_input_seed[seek] && result_sequence[result_count-3]>0&&result_sequence[result_count-2]>0&&result_sequence[result_count-1]>0)                //Wrong
+									if( array_input_seed[seek] && result_sequence[result_count-3]>0&&result_sequence[result_count-2]>0&&result_sequence[result_count-1]>0)    
 										flag[j]=1;
 									#endif
 							        result_count++;
@@ -1186,6 +1196,8 @@ int main(int argc, char **argv)
 			//cout<<length[24815]<<endl;
 			//                                                         //
 			//*********************************************************//		
+			
+			
 			// ====================================
 			// CPU postprocess
 			//////////////////////////////////////////
@@ -1223,6 +1235,8 @@ int main(int argc, char **argv)
 					track_result_3[i][j]=0.0;
 			*/
 
+			
+			// integrate the forward and backward tracking results (track_result and track_result1) into track_result2
 			for (int i=0;i<2*numVoxel;i++)
 			{
 				int len2=track_result1[i].size()/3;
